@@ -4,12 +4,49 @@ from PIL import Image, ImageChops, ImageEnhance
 import io
 import cv2
 import numpy as np
+import pytesseract
+import re
+import os
 
 app = Flask(__name__)
 
+# --- CONFIG ---
+COLLEGE_NAMES = ["SRIMCA", "S R I M C A", "SRIMCA COLLEGE", "SRIMCA COLLEGE OF COMPUTER APPLICATIONS"]
+LOGO_TEMPLATE_PATH = "templates/logo.png"  # keep your logo image here
+
+
+def contains_college_name(text):
+    """Check if OCR text contains college name."""
+    if not text:
+        return False
+    t = text.upper()
+    return any(name.upper() in t for name in COLLEGE_NAMES)
+
+
+def logo_match(cv_img, template_path=LOGO_TEMPLATE_PATH, threshold=0.5):
+    """Check if the logo appears in the image using template matching."""
+    if not os.path.exists(template_path):
+        print("⚠️ Logo template not found.")
+        return False
+
+    try:
+        template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
+        if template is None:
+            return False
+
+        img_gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+        res = cv2.matchTemplate(img_gray, template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, _ = cv2.minMaxLoc(res)
+        return max_val >= threshold
+    except Exception as e:
+        print("logo_match error:", e)
+        return False
+
+
 @app.route('/')
 def home():
-    return jsonify({"message": "Ghartak Verifier API active"})
+    return jsonify({"message": "🔥 Ghartak Verifier API active"})
+
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
@@ -20,9 +57,10 @@ def analyze():
         return jsonify({"error": "Missing image_url"}), 400
 
     try:
-        # Download image
+        # --- DOWNLOAD IMAGE ---
         response = requests.get(image_url)
         image = Image.open(io.BytesIO(response.content)).convert('RGB')
+        np_img = np.array(image)[:, :, ::-1].copy()  # PIL -> OpenCV BGR
 
         # --- ELA ANALYSIS ---
         ela_path = "temp_ela.jpg"
@@ -33,20 +71,39 @@ def analyze():
         max_diff = max([ex[1] for ex in extrema])
         scale = 255.0 / max_diff if max_diff else 1
         ela_image = ImageEnhance.Brightness(diff).enhance(scale)
+        ela_score = round(max_diff, 2)
 
-        # --- OpenCV NOISE CHECK ---
-        np_img = np.array(image)
+        # --- NOISE / BLUR CHECK ---
         gray = cv2.cvtColor(np_img, cv2.COLOR_BGR2GRAY)
         blur = cv2.Laplacian(gray, cv2.CV_64F).var()
-
-        ela_score = round(max_diff, 2)
         noise_score = round(blur, 2)
         tampered = ela_score > 25 or noise_score < 100  # tweak as needed
 
+        # --- OCR ---
+        ocr_text = pytesseract.image_to_string(image)
+        ocr_text_clean = ocr_text.strip()
+
+        # Extract 15-digit enrollment
+        match = re.search(r'\b\d{15}\b', ocr_text_clean)
+        enrollment_number = match.group() if match else None
+
+        # --- COLLEGE + LOGO CHECK ---
+        has_college_name = contains_college_name(ocr_text_clean)
+        has_logo = logo_match(np_img, threshold=0.45)
+        verified_college = has_college_name and has_logo
+
+        # --- FINAL DECISION ---
+        accepted = bool(enrollment_number and verified_college and not tampered)
+
         return jsonify({
+            "accepted": accepted,
             "tampered": tampered,
             "ela_score": ela_score,
-            "noise_score": noise_score
+            "noise_score": noise_score,
+            "enrollment_number": enrollment_number,
+            "has_college_name": has_college_name,
+            "has_logo": has_logo,
+            "ocr_excerpt": ocr_text_clean[:300]
         })
 
     except Exception as e:
