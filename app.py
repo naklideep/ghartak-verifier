@@ -11,20 +11,46 @@ import os
 app = Flask(__name__)
 
 # --- CONFIG ---
-COLLEGE_NAMES = ["SRIMCA", "S R I M C A", "SRIMCA COLLEGE", "SRIMCA COLLEGE OF COMPUTER APPLICATIONS"]
-LOGO_TEMPLATE_PATH = "templates/logo.png"  # keep your logo image here
+COLLEGE_NAMES = [
+    "UKA TARSADIA UNIVERSITY",
+    "TARSADIA UNIVERSITY",
+    "SRIMCA",
+    "SRIMCA COLLEGE",
+    "SRIMCA COLLEGE OF COMPUTER APPLICATIONS"
+]
+LOGO_TEMPLATE_PATH = "templates/logo.png"  # your logo image
 
 
 def contains_college_name(text):
-    """Check if OCR text contains college name."""
+    """Check if OCR text contains the college name."""
     if not text:
         return False
     t = text.upper()
     return any(name.upper() in t for name in COLLEGE_NAMES)
 
 
-def logo_match(cv_img, template_path=LOGO_TEMPLATE_PATH, threshold=0.5):
-    """Check if the logo appears in the image using template matching."""
+def extract_name(text):
+    """
+    Extract likely student name in format:
+    'DEEP H. CHAUDHARI' or 'Firstname Middlename Lastname'
+    """
+    name_pattern = re.compile(r'\b[A-Z]{2,}(?:\s+[A-Z]\.)?(?:\s+[A-Z]{2,})\b')
+    matches = name_pattern.findall(text)
+    # Return the first match with 2-3 words (avoiding junk)
+    for m in matches:
+        if 2 <= len(m.split()) <= 3:
+            return m.strip()
+    return None
+
+
+def extract_enrollment(text):
+    """Extract a 15-digit enrollment number."""
+    match = re.search(r'\b\d{15}\b', text)
+    return match.group() if match else None
+
+
+def logo_match(cv_img, template_path=LOGO_TEMPLATE_PATH, threshold=0.45):
+    """Check if logo appears in the image."""
     if not os.path.exists(template_path):
         print("⚠️ Logo template not found.")
         return False
@@ -77,17 +103,15 @@ def analyze():
         gray = cv2.cvtColor(np_img, cv2.COLOR_BGR2GRAY)
         blur = cv2.Laplacian(gray, cv2.CV_64F).var()
         noise_score = round(blur, 2)
-        tampered = ela_score > 25 or noise_score < 100  # tweak as needed
+        tampered = ela_score > 25 or noise_score < 100
 
         # --- OCR ---
         ocr_text = pytesseract.image_to_string(image)
-        ocr_text_clean = ocr_text.strip()
+        ocr_text_clean = ocr_text.upper().strip()
 
-        # Extract 15-digit enrollment
-        match = re.search(r'\b\d{15}\b', ocr_text_clean)
-        enrollment_number = match.group() if match else None
-
-        # --- COLLEGE + LOGO CHECK ---
+        # --- EXTRACT DETAILS ---
+        enrollment_number = extract_enrollment(ocr_text_clean)
+        name_detected = extract_name(ocr_text_clean)
         has_college_name = contains_college_name(ocr_text_clean)
         has_logo = logo_match(np_img, threshold=0.45)
         verified_college = has_college_name and has_logo
@@ -101,6 +125,7 @@ def analyze():
             "ela_score": ela_score,
             "noise_score": noise_score,
             "enrollment_number": enrollment_number,
+            "name_detected": name_detected,
             "has_college_name": has_college_name,
             "has_logo": has_logo,
             "ocr_excerpt": ocr_text_clean[:300]
