@@ -1,5 +1,6 @@
-Flask
+flask
 requests
-Pillow
-opencv-python-headless
+pillow
+opencv-python
 numpy
+pytesseract
