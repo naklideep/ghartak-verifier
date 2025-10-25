@@ -10,11 +10,13 @@ import os
 
 app = Flask(__name__)
 
-LOGO_TEMPLATE_PATH = "templates/logo.png"  # your logo image
+# 🔧 Path to your college logo template (used for logo matching)
+LOGO_TEMPLATE_PATH = "templates/logo.png"  # Put a reference logo here
 
 
+# 🧩 Extract student name from OCR text
 def extract_name(text):
-    """Extract likely student name in uppercase."""
+    """Extract likely student name in uppercase form."""
     name_pattern = re.compile(r'\b[A-Z]{2,}(?:\s+[A-Z]\.)?(?:\s+[A-Z]{2,})\b')
     matches = name_pattern.findall(text)
     for m in matches:
@@ -23,16 +25,18 @@ def extract_name(text):
     return None
 
 
+# 🧩 Extract 15-digit enrollment number
 def extract_enrollment(text):
     """Extract a 15-digit enrollment number."""
     match = re.search(r'\b\d{15}\b', text)
     return match.group() if match else None
 
 
+# 🧩 Match college logo template in image
 def logo_match(cv_img, template_path=LOGO_TEMPLATE_PATH, threshold=0.45):
-    """Check if logo appears in the image."""
+    """Return True if college logo detected in ID card."""
     if not os.path.exists(template_path):
-        print("⚠️ Logo template not found.")
+        print("⚠️ Logo template not found at:", template_path)
         return False
 
     try:
@@ -54,21 +58,25 @@ def home():
     return jsonify({"message": "🔥 Ghartak Verifier API active"})
 
 
+# 🧠 Main verification endpoint — takes an image URL
 @app.route('/analyze', methods=['POST'])
 def analyze():
-    data = request.get_json()
-    image_url = data.get("image_url")
-
-    if not image_url:
-        return jsonify({"error": "Missing image_url"}), 400
-
     try:
-        # --- DOWNLOAD IMAGE ---
-        response = requests.get(image_url)
-        image = Image.open(io.BytesIO(response.content)).convert('RGB')
-        np_img = np.array(image)[:, :, ::-1].copy()  # PIL -> OpenCV BGR
+        data = request.get_json(force=True)
+        image_url = data.get("image_url")
 
-        # --- ELA ANALYSIS ---
+        if not image_url:
+            return jsonify({"error": "Missing 'image_url' in request"}), 400
+
+        # --- DOWNLOAD IMAGE ---
+        response = requests.get(image_url, timeout=10)
+        if response.status_code != 200:
+            return jsonify({"error": "Failed to download image"}), 400
+
+        image = Image.open(io.BytesIO(response.content)).convert('RGB')
+        np_img = np.array(image)[:, :, ::-1].copy()  # Convert PIL → OpenCV (BGR)
+
+        # --- ELA (Error Level Analysis) ---
         ela_path = "temp_ela.jpg"
         image.save(ela_path, 'JPEG', quality=90)
         ela_image = Image.open(ela_path)
@@ -79,17 +87,17 @@ def analyze():
         ela_image = ImageEnhance.Brightness(diff).enhance(scale)
         ela_score = round(max_diff, 2)
 
-        # --- NOISE / BLUR CHECK ---
+        # --- BLUR / NOISE CHECK ---
         gray = cv2.cvtColor(np_img, cv2.COLOR_BGR2GRAY)
         blur = cv2.Laplacian(gray, cv2.CV_64F).var()
         noise_score = round(blur, 2)
         tampered = ela_score > 25 or noise_score < 100
 
-        # --- OCR ---
+        # --- OCR TEXT EXTRACTION ---
         ocr_text = pytesseract.image_to_string(image)
         ocr_text_clean = ocr_text.upper().strip()
 
-        # --- EXTRACT DETAILS ---
+        # --- INFO EXTRACTION ---
         enrollment_number = extract_enrollment(ocr_text_clean)
         name_detected = extract_name(ocr_text_clean)
         has_logo = logo_match(np_img, threshold=0.45)
