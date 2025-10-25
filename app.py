@@ -11,32 +11,13 @@ import os
 app = Flask(__name__)
 
 # --- CONFIG ---
-COLLEGE_NAMES = [
-    "UKA TARSADIA UNIVERSITY",
-    "TARSADIA UNIVERSITY",
-    "SRIMCA",
-    "SRIMCA COLLEGE",
-    "SRIMCA COLLEGE OF COMPUTER APPLICATIONS"
-]
 LOGO_TEMPLATE_PATH = "templates/logo.png"  # your logo image
 
 
-def contains_college_name(text):
-    """Check if OCR text contains the college name."""
-    if not text:
-        return False
-    t = text.upper()
-    return any(name.upper() in t for name in COLLEGE_NAMES)
-
-
 def extract_name(text):
-    """
-    Extract likely student name in format:
-    'DEEP H. CHAUDHARI' or 'Firstname Middlename Lastname'
-    """
+    """Extract likely student name in format: 'DEEP H. CHAUDHARI' or 'FIRSTNAME M LASTNAME'."""
     name_pattern = re.compile(r'\b[A-Z]{2,}(?:\s+[A-Z]\.)?(?:\s+[A-Z]{2,})\b')
     matches = name_pattern.findall(text)
-    # Return the first match with 2-3 words (avoiding junk)
     for m in matches:
         if 2 <= len(m.split()) <= 3:
             return m.strip()
@@ -112,12 +93,10 @@ def analyze():
         # --- EXTRACT DETAILS ---
         enrollment_number = extract_enrollment(ocr_text_clean)
         name_detected = extract_name(ocr_text_clean)
-        has_college_name = contains_college_name(ocr_text_clean)
         has_logo = logo_match(np_img, threshold=0.45)
-        verified_college = has_college_name and has_logo
 
         # --- FINAL DECISION ---
-        accepted = bool(enrollment_number and verified_college and not tampered)
+        accepted = bool(enrollment_number and has_logo and not tampered)
 
         return jsonify({
             "accepted": accepted,
@@ -126,7 +105,6 @@ def analyze():
             "noise_score": noise_score,
             "enrollment_number": enrollment_number,
             "name_detected": name_detected,
-            "has_college_name": has_college_name,
             "has_logo": has_logo,
             "ocr_excerpt": ocr_text_clean[:300]
         })
