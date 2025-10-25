@@ -33,20 +33,15 @@ def home():
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
-    data = request.get_json()
-    image_url = data.get("image_url")
-
-    if not image_url:
-        return jsonify({"error": "Missing image_url"}), 400
-
     try:
-        # --- DOWNLOAD IMAGE ---
-        response = requests.get(image_url)
-        if response.status_code != 200:
-            return jsonify({"error": "Failed to fetch image"}), 400
+        # 🔹 Get image from form (accept both 'file' or 'image')
+        uploaded_file = request.files.get('file') or request.files.get('image')
+        if not uploaded_file:
+            return jsonify({"error": "No image uploaded. Field name must be 'file' or 'image'."}), 400
 
-        image = Image.open(io.BytesIO(response.content)).convert('RGB')
-        np_img = np.array(image)[:, :, ::-1].copy()  # PIL -> OpenCV BGR
+        # 🔹 Load image
+        image = Image.open(uploaded_file.stream).convert('RGB')
+        np_img = np.array(image)[:, :, ::-1].copy()  # PIL → OpenCV (BGR)
 
         # --- ELA ANALYSIS ---
         ela_path = "temp_ela.jpg"
@@ -59,21 +54,22 @@ def analyze():
         ela_image = ImageEnhance.Brightness(diff).enhance(scale)
         ela_score = round(max_diff, 2)
 
-        # --- NOISE / BLUR CHECK ---
+        # --- BLUR / NOISE CHECK ---
         gray = cv2.cvtColor(np_img, cv2.COLOR_BGR2GRAY)
         blur = cv2.Laplacian(gray, cv2.CV_64F).var()
         noise_score = round(blur, 2)
+
         tampered = ela_score > 25 or noise_score < 100
 
         # --- OCR ---
         ocr_text = pytesseract.image_to_string(image)
         ocr_text_clean = ocr_text.upper().strip()
 
-        # --- EXTRACT DETAILS ---
+        # --- Extract info ---
         enrollment_number = extract_enrollment(ocr_text_clean)
         name_detected = extract_name(ocr_text_clean)
 
-        # --- FINAL DECISION ---
+        # --- Final result ---
         accepted = bool(enrollment_number and not tampered)
 
         return jsonify({
@@ -87,7 +83,7 @@ def analyze():
         })
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Internal error: {str(e)}"}), 500
 
 
 if __name__ == '__main__':
