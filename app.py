@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify
-import requests
 from PIL import Image, ImageChops, ImageEnhance
 import io
 import cv2
@@ -7,16 +6,15 @@ import numpy as np
 import pytesseract
 import re
 import os
+import base64
 
 app = Flask(__name__)
 
-# 🔧 Path to your college logo template (used for logo matching)
-LOGO_TEMPLATE_PATH = "templates/logo.png"  # Put a reference logo here
+# 🔧 Path to your college logo template
+LOGO_TEMPLATE_PATH = "templates/logo.png"
 
-
-# 🧩 Extract student name from OCR text
+# 🧩 Extract student name
 def extract_name(text):
-    """Extract likely student name in uppercase form."""
     name_pattern = re.compile(r'\b[A-Z]{2,}(?:\s+[A-Z]\.)?(?:\s+[A-Z]{2,})\b')
     matches = name_pattern.findall(text)
     for m in matches:
@@ -24,26 +22,20 @@ def extract_name(text):
             return m.strip()
     return None
 
-
-# 🧩 Extract 15-digit enrollment number
+# 🧩 Extract enrollment number
 def extract_enrollment(text):
-    """Extract a 15-digit enrollment number."""
     match = re.search(r'\b\d{15}\b', text)
     return match.group() if match else None
 
-
-# 🧩 Match college logo template in image
+# 🧩 Match logo
 def logo_match(cv_img, template_path=LOGO_TEMPLATE_PATH, threshold=0.45):
-    """Return True if college logo detected in ID card."""
     if not os.path.exists(template_path):
-        print("⚠️ Logo template not found at:", template_path)
+        print("⚠️ Logo template not found:", template_path)
         return False
-
     try:
         template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
         if template is None:
             return False
-
         img_gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
         res = cv2.matchTemplate(img_gray, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, _ = cv2.minMaxLoc(res)
@@ -52,29 +44,24 @@ def logo_match(cv_img, template_path=LOGO_TEMPLATE_PATH, threshold=0.45):
         print("logo_match error:", e)
         return False
 
-
 @app.route('/')
 def home():
     return jsonify({"message": "🔥 Ghartak Verifier API active"})
 
-
-# 🧠 Main verification endpoint — takes an image URL
+# 🧠 Main verification endpoint — accepts base64 image
 @app.route('/analyze', methods=['POST'])
 def analyze():
     try:
         data = request.get_json(force=True)
-        image_url = data.get("image_url")
+        image_base64 = data.get("image_base64")
 
-        if not image_url:
-            return jsonify({"error": "Missing 'image_url' in request"}), 400
+        if not image_base64:
+            return jsonify({"error": "Missing 'image_base64' in request"}), 400
 
-        # --- DOWNLOAD IMAGE ---
-        response = requests.get(image_url, timeout=10)
-        if response.status_code != 200:
-            return jsonify({"error": "Failed to download image"}), 400
-
-        image = Image.open(io.BytesIO(response.content)).convert('RGB')
-        np_img = np.array(image)[:, :, ::-1].copy()  # Convert PIL → OpenCV (BGR)
+        # Decode base64
+        image_bytes = base64.b64decode(image_base64)
+        image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        np_img = np.array(image)[:, :, ::-1].copy()  # PIL → OpenCV BGR
 
         # --- ELA (Error Level Analysis) ---
         ela_path = "temp_ela.jpg"
@@ -87,22 +74,21 @@ def analyze():
         ela_image = ImageEnhance.Brightness(diff).enhance(scale)
         ela_score = round(max_diff, 2)
 
-        # --- BLUR / NOISE CHECK ---
+        # --- BLUR / NOISE ---
         gray = cv2.cvtColor(np_img, cv2.COLOR_BGR2GRAY)
         blur = cv2.Laplacian(gray, cv2.CV_64F).var()
         noise_score = round(blur, 2)
         tampered = ela_score > 25 or noise_score < 100
 
-        # --- OCR TEXT EXTRACTION ---
+        # --- OCR ---
         ocr_text = pytesseract.image_to_string(image)
         ocr_text_clean = ocr_text.upper().strip()
 
-        # --- INFO EXTRACTION ---
+        # --- Extract Info ---
         enrollment_number = extract_enrollment(ocr_text_clean)
         name_detected = extract_name(ocr_text_clean)
         has_logo = logo_match(np_img, threshold=0.45)
 
-        # --- FINAL DECISION ---
         accepted = bool(enrollment_number and has_logo and not tampered)
 
         return jsonify({
@@ -119,7 +105,6 @@ def analyze():
     except Exception as e:
         print("❌ Error:", e)
         return jsonify({"error": str(e)}), 500
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
