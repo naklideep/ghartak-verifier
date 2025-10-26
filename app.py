@@ -29,10 +29,11 @@ def tamper_check(pil_img):
         blur = cv2.Laplacian(gray, cv2.CV_64F).var()
         noise_score = round(blur, 2)
 
-        tampered = ela_score > ELA_THRESHOLD or noise_score < NOISE_THRESHOLD
-        return tampered, ela_score, noise_score
+        tampered = bool(ela_score > ELA_THRESHOLD or noise_score < NOISE_THRESHOLD)
+        return tampered, float(ela_score), float(noise_score)
     except Exception as e:
-        return True, -1, -1  # treat as tampered if any error
+        return True, -1.0, -1.0  # treat as tampered if any error
+
 
 @app.route('/')
 def home():
