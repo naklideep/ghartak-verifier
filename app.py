@@ -9,26 +9,21 @@ import base64
 
 app = Flask(__name__)
 
-# Thresholds for tamper detection
-ELA_THRESHOLD = 25
-NOISE_THRESHOLD = 100
-
 # Extract 15-digit enrollment
 def extract_enrollment(text):
     match = re.search(r'\b\d{15}\b', text)
     return match.group() if match else None
 
-# Error Level Analysis (ELA) + Noise check
+# Simple tamper check (ELA + noise)
 def tamper_check(pil_img):
     try:
+        # ELA
         ela_path = "temp_ela.jpg"
         pil_img.save(ela_path, 'JPEG', quality=90)
         ela_image = Image.open(ela_path)
         diff = ImageChops.difference(pil_img, ela_image)
         extrema = diff.getextrema()
         max_diff = max([ex[1] for ex in extrema])
-        scale = 255.0 / max_diff if max_diff else 1
-        ela_image = ImageEnhance.Brightness(diff).enhance(scale)
         ela_score = round(max_diff, 2)
 
         # Noise / blur
@@ -37,10 +32,9 @@ def tamper_check(pil_img):
         blur = cv2.Laplacian(gray, cv2.CV_64F).var()
         noise_score = round(blur, 2)
 
-        is_tampered = ela_score > ELA_THRESHOLD or noise_score < NOISE_THRESHOLD
-        return is_tampered, ela_score, noise_score
-    except Exception as e:
-        return True, -1, -1  # treat as tampered if error
+        return ela_score, noise_score
+    except:
+        return -1, -1
 
 @app.route('/')
 def home():
@@ -54,7 +48,7 @@ def analyze():
         if not image_b64:
             return jsonify({"error": "Missing 'image_base64'"}), 400
 
-        # Decode base64 image
+        # Decode image
         try:
             image_bytes = base64.b64decode(image_b64)
             image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
@@ -64,33 +58,21 @@ def analyze():
         # OCR
         try:
             ocr_text = pytesseract.image_to_string(image)
-            ocr_text_clean = ocr_text.upper().strip()
-        except Exception as e:
+            ocr_text_clean = ocr_text.strip()
+        except:
             ocr_text_clean = ""
 
-        # Enrollment check only
+        # Extract enrollment
         enrollment_number = extract_enrollment(ocr_text_clean)
 
         # Tamper check
-        tampered, ela_score, noise_score = tamper_check(image)
-
-        # Collect rejection reasons
-        reasons = []
-        if not enrollment_number:
-            reasons.append("Enrollment number not found")
-        if tampered:
-            reasons.append("Image tampered or blurry")
-
-        accepted = len(reasons) == 0
+        ela_score, noise_score = tamper_check(image)
 
         return jsonify({
-            "accepted": accepted,
-            "reasons": reasons,
-            "tampered": tampered,
-            "ela_score": ela_score,
-            "noise_score": noise_score,
             "enrollment_number": enrollment_number,
-            "ocr_excerpt": ocr_text_clean[:300]
+            "ocr_text": ocr_text_clean,
+            "ela_score": ela_score,
+            "noise_score": noise_score
         })
 
     except Exception as e:
