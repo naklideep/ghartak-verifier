@@ -11,9 +11,10 @@ import base64
 app = Flask(__name__)
 
 # 🔧 Path to your college logo template
-LOGO_TEMPLATE_PATH = "templates/logo.png"
+LOGO_TEMPLATE_PATH = "templates/logo.png"  # make sure this exists
 
-# 🧩 Extract student name
+
+# 🧩 Extract student name from OCR text
 def extract_name(text):
     name_pattern = re.compile(r'\b[A-Z]{2,}(?:\s+[A-Z]\.)?(?:\s+[A-Z]{2,})\b')
     matches = name_pattern.findall(text)
@@ -22,15 +23,17 @@ def extract_name(text):
             return m.strip()
     return None
 
-# 🧩 Extract enrollment number
+
+# 🧩 Extract 15-digit enrollment number
 def extract_enrollment(text):
     match = re.search(r'\b\d{15}\b', text)
     return match.group() if match else None
 
-# 🧩 Match logo
+
+# 🧩 Match college logo template
 def logo_match(cv_img, template_path=LOGO_TEMPLATE_PATH, threshold=0.45):
     if not os.path.exists(template_path):
-        print("⚠️ Logo template not found:", template_path)
+        print("⚠️ Logo template not found at:", template_path)
         return False
     try:
         template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
@@ -44,24 +47,25 @@ def logo_match(cv_img, template_path=LOGO_TEMPLATE_PATH, threshold=0.45):
         print("logo_match error:", e)
         return False
 
+
 @app.route('/')
 def home():
     return jsonify({"message": "🔥 Ghartak Verifier API active"})
 
-# 🧠 Main verification endpoint — accepts base64 image
+
 @app.route('/analyze', methods=['POST'])
 def analyze():
     try:
         data = request.get_json(force=True)
-        image_base64 = data.get("image_base64")
+        image_b64 = data.get("image_base64")
 
-        if not image_base64:
+        if not image_b64:
             return jsonify({"error": "Missing 'image_base64' in request"}), 400
 
-        # Decode base64
-        image_bytes = base64.b64decode(image_base64)
+        # --- DECODE BASE64 ---
+        image_bytes = base64.b64decode(image_b64)
         image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-        np_img = np.array(image)[:, :, ::-1].copy()  # PIL → OpenCV BGR
+        np_img = np.array(image)[:, :, ::-1].copy()  # PIL → OpenCV (BGR)
 
         # --- ELA (Error Level Analysis) ---
         ela_path = "temp_ela.jpg"
@@ -74,21 +78,22 @@ def analyze():
         ela_image = ImageEnhance.Brightness(diff).enhance(scale)
         ela_score = round(max_diff, 2)
 
-        # --- BLUR / NOISE ---
+        # --- BLUR / NOISE CHECK ---
         gray = cv2.cvtColor(np_img, cv2.COLOR_BGR2GRAY)
         blur = cv2.Laplacian(gray, cv2.CV_64F).var()
         noise_score = round(blur, 2)
         tampered = ela_score > 25 or noise_score < 100
 
-        # --- OCR ---
+        # --- OCR TEXT EXTRACTION ---
         ocr_text = pytesseract.image_to_string(image)
         ocr_text_clean = ocr_text.upper().strip()
 
-        # --- Extract Info ---
+        # --- INFO EXTRACTION ---
         enrollment_number = extract_enrollment(ocr_text_clean)
         name_detected = extract_name(ocr_text_clean)
         has_logo = logo_match(np_img, threshold=0.45)
 
+        # --- FINAL DECISION ---
         accepted = bool(enrollment_number and has_logo and not tampered)
 
         return jsonify({
@@ -105,6 +110,7 @@ def analyze():
     except Exception as e:
         print("❌ Error:", e)
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
