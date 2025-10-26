@@ -11,7 +11,7 @@ app = Flask(__name__)
 
 # College name keywords (partial match allowed)
 COLLEGE_KEYWORDS = [
-    "UKA", "TARSADIA", "UNIVERSITY", "SRIMCA", "COLLEGE", "COMPUTER APPLICATIONS"
+    "UKA TARSADIA UNIVERSITY", "TARSADIA", "UNIVERSITY", "SRIMCA", "COLLEGE", "COMPUTER APPLICATIONS"
 ]
 
 # Thresholds for tamper detection
@@ -67,7 +67,7 @@ def analyze():
         if not image_b64:
             return jsonify({"error": "Missing 'image_base64'"}), 400
 
-        # Decode base64
+        # Decode base64 image
         try:
             image_bytes = base64.b64decode(image_b64)
             image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
@@ -80,18 +80,28 @@ def analyze():
             ocr_text_clean = ocr_text.upper().strip()
         except Exception as e:
             ocr_text_clean = ""
-        
-        # Enrollment and college check
+
+        # Enrollment and college checks
         enrollment_number = extract_enrollment(ocr_text_clean)
         college_ok = check_college_name(ocr_text_clean)
 
         # Tamper check
         tampered, ela_score, noise_score = tamper_check(image)
 
-        accepted = bool(enrollment_number and college_ok and not tampered)
+        # Collect rejection reasons
+        reasons = []
+        if not enrollment_number:
+            reasons.append("Enrollment number not found")
+        if not college_ok:
+            reasons.append("College name mismatch")
+        if tampered:
+            reasons.append("Image tampered or blurry")
+
+        accepted = len(reasons) == 0
 
         return jsonify({
             "accepted": accepted,
+            "reasons": reasons,           # <-- new field with exact issues
             "tampered": tampered,
             "ela_score": ela_score,
             "noise_score": noise_score,
@@ -104,6 +114,7 @@ def analyze():
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000, debug=True)
