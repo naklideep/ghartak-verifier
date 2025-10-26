@@ -1,59 +1,59 @@
 from flask import Flask, request, jsonify
-from PIL import Image, ImageChops, ImageEnhance
+from PIL import Image, ImageChops, ImageEnhance, UnidentifiedImageError
 import io
 import cv2
 import numpy as np
 import pytesseract
 import re
 import base64
-import os
 
 app = Flask(__name__)
 
-# College names (uppercased)
-COLLEGE_NAMES = [
-    "UKA TARSADIA UNIVERSITY",
-    "TARSADIA UNIVERSITY",
-    "SRIMCA",
-    "SRIMCA COLLEGE",
-    "SRIMCA COLLEGE OF COMPUTER APPLICATIONS"
+# College name keywords (partial match allowed)
+COLLEGE_KEYWORDS = [
+    "UKA", "TARSADIA", "UNIVERSITY", "SRIMCA", "COLLEGE", "COMPUTER APPLICATIONS"
 ]
 
-# Extract 15-digit enrollment number
+# Thresholds for tamper detection
+ELA_THRESHOLD = 25
+NOISE_THRESHOLD = 100
+
+# Extract 15-digit enrollment
 def extract_enrollment(text):
     match = re.search(r'\b\d{15}\b', text)
     return match.group() if match else None
 
-# Fuzzy college name check
+# Check if college name exists (partial match)
 def check_college_name(text):
     text_upper = text.upper()
-    for name in COLLEGE_NAMES:
-        name_parts = name.split()
-        match_count = sum(1 for part in name_parts if part in text_upper)
-        if match_count / len(name_parts) >= 0.5:
+    for keyword in COLLEGE_KEYWORDS:
+        if keyword in text_upper:
             return True
     return False
 
-# Tamper check (ELA + blur)
-def is_tampered(cv_img, pil_img):
+# Error Level Analysis (ELA) + Noise check
+def tamper_check(pil_img):
     try:
-        # ELA
         ela_path = "temp_ela.jpg"
         pil_img.save(ela_path, 'JPEG', quality=90)
-        diff = ImageChops.difference(pil_img, Image.open(ela_path))
-        max_diff = max([ex[1] for ex in diff.getextrema()])
+        ela_image = Image.open(ela_path)
+        diff = ImageChops.difference(pil_img, ela_image)
+        extrema = diff.getextrema()
+        max_diff = max([ex[1] for ex in extrema])
+        scale = 255.0 / max_diff if max_diff else 1
+        ela_image = ImageEnhance.Brightness(diff).enhance(scale)
         ela_score = round(max_diff, 2)
 
-        # Blur / noise
-        gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+        # Noise / blur
+        np_img = np.array(pil_img)[:, :, ::-1].copy()
+        gray = cv2.cvtColor(np_img, cv2.COLOR_BGR2GRAY)
         blur = cv2.Laplacian(gray, cv2.CV_64F).var()
         noise_score = round(blur, 2)
 
-        tampered = ela_score > 35 or noise_score < 80
-        return tampered, ela_score, noise_score
+        is_tampered = ela_score > ELA_THRESHOLD or noise_score < NOISE_THRESHOLD
+        return is_tampered, ela_score, noise_score
     except Exception as e:
-        print("❌ Tamper check error:", e)
-        return True, 0, 0  # If tamper check fails, treat as tampered
+        return True, -1, -1  # treat as tampered if error
 
 @app.route('/')
 def home():
@@ -63,39 +63,31 @@ def home():
 def analyze():
     try:
         data = request.get_json(force=True)
-        if not data or "image_base64" not in data:
-            return jsonify({"error": "Missing 'image_base64' in request"}), 400
-
-        image_b64 = data["image_base64"]
+        image_b64 = data.get("image_base64")
+        if not image_b64:
+            return jsonify({"error": "Missing 'image_base64'"}), 400
 
         # Decode base64
         try:
             image_bytes = base64.b64decode(image_b64)
             image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-            np_img = np.array(image)[:, :, ::-1].copy()  # PIL -> OpenCV (BGR)
-        except Exception as e:
-            print("❌ Image decoding error:", e)
-            return jsonify({"error": f"Image decoding failed: {str(e)}"}), 400
+        except (UnidentifiedImageError, Exception) as e:
+            return jsonify({"error": f"Image decode/open failed: {e}"}), 400
 
-        # OCR preprocessing
+        # OCR
         try:
-            gray = cv2.cvtColor(np_img, cv2.COLOR_BGR2GRAY)
-            gray = cv2.GaussianBlur(gray, (3,3), 0)
-            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            ocr_text = pytesseract.image_to_string(thresh, config="--psm 6")
+            ocr_text = pytesseract.image_to_string(image)
             ocr_text_clean = ocr_text.upper().strip()
         except Exception as e:
-            print("❌ OCR error:", e)
             ocr_text_clean = ""
-
-        # Extract info
+        
+        # Enrollment and college check
         enrollment_number = extract_enrollment(ocr_text_clean)
         college_ok = check_college_name(ocr_text_clean)
 
         # Tamper check
-        tampered, ela_score, noise_score = is_tampered(np_img, image)
+        tampered, ela_score, noise_score = tamper_check(image)
 
-        # Final decision
         accepted = bool(enrollment_number and college_ok and not tampered)
 
         return jsonify({
@@ -109,9 +101,9 @@ def analyze():
         })
 
     except Exception as e:
-        print("❌ /analyze error:", e)
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    # Enable debug=True for automatic reloads during dev
     app.run(host='0.0.0.0', port=10000, debug=True)
