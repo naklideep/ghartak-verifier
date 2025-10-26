@@ -3,25 +3,17 @@ from PIL import Image, ImageChops, ImageEnhance, UnidentifiedImageError
 import io
 import cv2
 import numpy as np
-import pytesseract
-import re
 import base64
 
 app = Flask(__name__)
 
-# Thresholds for tamper detection
+# Thresholds
 ELA_THRESHOLD = 25
 NOISE_THRESHOLD = 100
 
-# Extract 15-digit enrollment
-def extract_enrollment(text):
-    match = re.search(r'\b\d{15}\b', text)
-    return match.group() if match else None
-
-# Error Level Analysis (ELA) + Noise check
 def tamper_check(pil_img):
     try:
-        # Save and reopen image for ELA
+        # Save & reload for ELA
         ela_path = "temp_ela.jpg"
         pil_img.save(ela_path, 'JPEG', quality=90)
         ela_image = Image.open(ela_path)
@@ -31,7 +23,7 @@ def tamper_check(pil_img):
         ImageEnhance.Brightness(diff).enhance(scale)
         ela_score = round(max_diff, 2)
 
-        # Noise / blur detection
+        # Noise / blur
         np_img = np.array(pil_img)[:, :, ::-1].copy()
         gray = cv2.cvtColor(np_img, cv2.COLOR_BGR2GRAY)
         blur = cv2.Laplacian(gray, cv2.CV_64F).var()
@@ -40,11 +32,11 @@ def tamper_check(pil_img):
         tampered = ela_score > ELA_THRESHOLD or noise_score < NOISE_THRESHOLD
         return tampered, ela_score, noise_score
     except Exception as e:
-        return True, -1, -1  # treat as tampered if error
+        return True, -1, -1  # treat as tampered if any error
 
 @app.route('/')
 def home():
-    return jsonify({"message": "🔥 Ghartak Verifier API active"})
+    return jsonify({"message": "🔥 Ghartak Tamper Checker Active"})
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
@@ -54,32 +46,20 @@ def analyze():
         if not image_b64:
             return jsonify({"error": "Missing 'image_base64'"}), 400
 
-        # Decode base64 image
+        # Decode image
         try:
             image_bytes = base64.b64decode(image_b64)
             image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
         except Exception as e:
             return jsonify({"error": f"Image decode/open failed: {e}"}), 400
 
-        # OCR
-        try:
-            ocr_text = pytesseract.image_to_string(image)
-            ocr_text_clean = ocr_text.strip()
-        except Exception as e:
-            ocr_text_clean = ""
-
-        # Enrollment extraction
-        enrollment_number = extract_enrollment(ocr_text_clean)
-
         # Tamper check
         tampered, ela_score, noise_score = tamper_check(image)
 
         return jsonify({
-            "enrollment_number": enrollment_number,
             "tampered": tampered,
             "ela_score": ela_score,
-            "noise_score": noise_score,
-            "ocr_excerpt": ocr_text_clean[:300]
+            "noise_score": noise_score
         })
 
     except Exception as e:
