@@ -6,6 +6,7 @@ import numpy as np
 import pytesseract
 import re
 import base64
+from difflib import SequenceMatcher  # for fuzzy matching
 
 app = Flask(__name__)
 
@@ -23,11 +24,12 @@ def extract_enrollment(text):
     match = re.search(r'\b\d{15}\b', text)
     return match.group() if match else None
 
-# Check if college name exists (partial match)
+# Fuzzy check if college name exists
 def check_college_name(text):
     text_upper = text.upper()
     for keyword in COLLEGE_KEYWORDS:
-        if keyword in text_upper:
+        ratio = SequenceMatcher(None, text_upper, keyword).ratio()
+        if ratio > 0.6:  # allow partial / slightly misread names
             return True
     return False
 
@@ -101,7 +103,7 @@ def analyze():
 
         return jsonify({
             "accepted": accepted,
-            "reasons": reasons,           # <-- new field with exact issues
+            "reasons": reasons,
             "tampered": tampered,
             "ela_score": ela_score,
             "noise_score": noise_score,
@@ -114,7 +116,6 @@ def analyze():
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000, debug=True)
