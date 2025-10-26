@@ -6,14 +6,8 @@ import numpy as np
 import pytesseract
 import re
 import base64
-from difflib import SequenceMatcher  # for fuzzy matching
 
 app = Flask(__name__)
-
-# College name keywords (partial match allowed)
-COLLEGE_KEYWORDS = [
-    "UKA TARSADIA UNIVERSITY", "TARSADIA", "UNIVERSITY", "SRIMCA", "COLLEGE", "COMPUTER APPLICATIONS"
-]
 
 # Thresholds for tamper detection
 ELA_THRESHOLD = 25
@@ -23,15 +17,6 @@ NOISE_THRESHOLD = 100
 def extract_enrollment(text):
     match = re.search(r'\b\d{15}\b', text)
     return match.group() if match else None
-
-# Fuzzy check if college name exists
-def check_college_name(text):
-    text_upper = text.upper()
-    for keyword in COLLEGE_KEYWORDS:
-        ratio = SequenceMatcher(None, text_upper, keyword).ratio()
-        if ratio > 0.6:  # allow partial / slightly misread names
-            return True
-    return False
 
 # Error Level Analysis (ELA) + Noise check
 def tamper_check(pil_img):
@@ -83,9 +68,8 @@ def analyze():
         except Exception as e:
             ocr_text_clean = ""
 
-        # Enrollment and college checks
+        # Enrollment check only
         enrollment_number = extract_enrollment(ocr_text_clean)
-        college_ok = check_college_name(ocr_text_clean)
 
         # Tamper check
         tampered, ela_score, noise_score = tamper_check(image)
@@ -94,8 +78,6 @@ def analyze():
         reasons = []
         if not enrollment_number:
             reasons.append("Enrollment number not found")
-        if not college_ok:
-            reasons.append("College name mismatch")
         if tampered:
             reasons.append("Image tampered or blurry")
 
@@ -108,7 +90,6 @@ def analyze():
             "ela_score": ela_score,
             "noise_score": noise_score,
             "enrollment_number": enrollment_number,
-            "college_ok": college_ok,
             "ocr_excerpt": ocr_text_clean[:300]
         })
 
